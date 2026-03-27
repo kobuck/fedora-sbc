@@ -72,5 +72,5 @@ documentation and silence.
 
 Builds use mainline sources:
 - **riscv64:** RISC-V builder VM (x86_64 host, riscv64 cross-compiler), U-Boot v2026.01, OpenSBI v1.8.1, Linux v6.19
-- **aarch64:** AArch64 builder VM (native aarch64), Linux v6.19 / v7.0-rc4
+- **aarch64:** AArch64 builder VM (x86_64 host, aarch64-linux-gnu- cross-compiler), Linux v6.19 / v7.0-rc4
 - Fedora 43 packages from [riscv-kojipkgs.fedoraproject.org](https://riscv-kojipkgs.fedoraproject.org/repos/f43-build/latest/riscv64/) (riscv64) and standard Fedora mirrors (aarch64)

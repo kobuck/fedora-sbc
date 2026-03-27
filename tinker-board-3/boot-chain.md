@@ -40,8 +40,9 @@ The idbloader packages the DDR initialization firmware and U-Boot SPL into a
 single blob written to sector 64. It initializes LPDDR4, sets up the clock tree,
 and loads TF-A and U-Boot proper into DRAM.
 
-Built from mainline U-Boot using `rk3566-tinker-board-3` defconfig. The Tinker
-Board 3 is a supported board in mainline U-Boot — no custom patches required.
+Built from mainline U-Boot using `rk3566-tinker-board-3` defconfig on a
+cross-compile builder VM (x86_64 host, aarch64-linux-gnu- cross-compiler).
+The Tinker Board 3 is a supported board in mainline U-Boot — no custom patches required.
 
 ---
 
