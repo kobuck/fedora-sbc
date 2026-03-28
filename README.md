@@ -2,6 +2,11 @@
 
 Worked examples of Fedora running on SBC hardware via an open firmware stack.
 
+These are worked examples, not a maintained project. Corrections, additions,
+and reports from people working on the same or similar hardware are welcome —
+open an [issue](../../issues) for specific problems or inaccuracies, or start a
+[discussion](../../discussions) for questions and experience sharing.
+
 ## What These Examples Demonstrate
 
 Each example documents a complete boot chain from power-on to a running Fedora
