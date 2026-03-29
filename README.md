@@ -17,23 +17,29 @@ userspace, built on the following architectural principles:
   TF-A on AArch64)
 - **systemd-boot as the EFI boot manager** — standard UEFI handoff between
   U-Boot and the OS, Boot Loader Specification (BLS) entries for kernel management
-- **Current Fedora release** — standard Fedora package repositories, standard
-  userspace, no custom distribution
+- **Fedora packages as the default** — standard Fedora package repositories and
+  userspace wherever available; custom builds only where Fedora packaging gaps
+  require them, with the gap explicitly identified
 
 The goal in each case is a board that boots to a functional Fedora userspace and
 can receive kernel and package updates through normal Fedora tooling.
 
 ## Scope
 
-These examples cover the firmware and boot chain layer. They do not address:
+These examples cover the firmware and boot chain layer. The kernel strategy
+varies by architecture, driven by Fedora packaging availability:
 
-- Building or modifying the Fedora distribution kernel for SBC hardware
-- Use of dracut for initramfs-based driver loading to avoid built-in kernel config
-- Integration of SBC-specific hardware beyond what is needed to reach a functional
-  Fedora userspace
+**AArch64 boards** use the Fedora-packaged kernel installed via `dnf`. dracut
+generates an initramfs automatically via kernel-install, and `dnf update kernel`
+works without manual intervention. UUID references in boot entries are safe.
 
-Those are valid approaches and valid areas of future work. They are not what
-these examples demonstrate.
+**RISC-V (riscv64) boards** have no kernel RPM in standard Fedora repos —
+riscv64 builds exist on Fedora's Koji infrastructure but cannot be installed
+cleanly alongside a standard Fedora system without repo conflicts. A custom-built
+kernel is therefore required. To avoid needing an initrd for early driver loading,
+all drivers in the rootfs path are compiled in (`=y`). This is a workaround for
+a packaging gap, not a design preference — when Fedora ships riscv64 kernel RPMs
+in standard repos, these boards should migrate to the packaged kernel + dracut path.
 
 The examples show where the goal was reached, where it was partially reached,
 and where it is blocked. A working result and an honest status report on an
@@ -56,8 +62,8 @@ incomplete one are both useful outputs.
 | **Secure firmware** | OpenSBI v1.8.1 (in U-Boot FIT) | OpenSBI v1.8.1 (in U-Boot FIT) | TF-A BL31 (in idbloader/FIT) |
 | **Bootloader** | U-Boot v2026.01, SPI NOR | U-Boot v2026.01, SPI NOR | U-Boot v2024.x, SD raw |
 | **Boot manager** | systemd-boot (bootctl installed) | systemd-boot (fallback path) | systemd-boot (bootctl installed) |
-| **Kernel** | Linux 6.19.0, mainline DTS | Linux 6.19.0, custom DTS | Linux 7.0-rc4, custom DTS (⚠️ ethernet hold) |
-| **initrd** | None — no-initrd build | None — no-initrd build | dracut initramfs (pre-scope, see note) |
+| **Kernel** | Linux 6.19.0, custom build (no riscv64 RPM in Fedora repos) | Linux 6.19.0, custom build (no riscv64 RPM in Fedora repos) | Linux 7.0-rc4, Fedora-packaged (⚠️ ethernet hold) |
+| **initrd** | None — custom build, rootfs-path drivers =y | None — custom build, rootfs-path drivers =y | dracut initramfs (via kernel-install) |
 | **root= cmdline** | Block device path required | Block device path required | UUID safe (initrd resolves it) |
 | **Rootfs device** | SD card | NVMe | SD card |
 | **efivarfs** | rw (EFI_RT_VOLATILE_STORE=y) | ro | rw |
@@ -69,9 +75,10 @@ incomplete one are both useful outputs.
 |---|---|---|
 | Secure firmware | OpenSBI (RISC-V SBI spec) | TF-A BL31 (ARM TrustZone) |
 | Boot ROM discovery | Partition type GUID | Raw sector offset |
-| initrd | Not used — drivers must be =y | dracut initramfs (pre-scope approach) |
+| Kernel source | Custom build — no riscv64 RPM in standard Fedora repos | Fedora-packaged (`dnf install kernel`) |
+| initrd | None — custom build, rootfs-path drivers =y | dracut initramfs (via kernel-install) |
 | `root=` cmdline | Block device path only | UUID/LABEL safe |
-| `dnf update kernel` | Manual (no kernel-install DTB plugin) | Automatic via kernel-install + BLS |
+| `dnf update kernel` | Manual (no kernel-install DTB plugin yet) | Automatic via kernel-install + BLS |
 
 ## JH7110 Notes (riscv64 boards)
 
@@ -81,8 +88,10 @@ incomplete one are both useful outputs.
   SPL GUID: `2E54B353-1271-4842-806F-E436D6AF6985`
   U-Boot FIT GUID: `BC13C2FF-59E6-4262-A352-B275FD6F7172`
 
-- **No initrd** — Storage drivers must be built-in (`=y`). Any driver in the
-  path between power-on and rootfs mount must be compiled in, not loaded as a module.
+- **Custom kernel (packaging gap)** — Fedora does not ship riscv64 kernel RPMs in
+  standard repos. A custom-built kernel is required. All drivers in the rootfs path
+  must be built-in (`=y`) — without an initrd there is no early userspace to load
+  modules before rootfs mount.
 
 - **EFI variable store** — U-Boot uses `ubootefi.var` on the ESP.
   `CONFIG_EFI_RT_VOLATILE_STORE=y` required for writable efivarfs.
