@@ -7,27 +7,20 @@ Hardware: ASUS Tinker Board 3, Rockchip RK3566 SoC (AArch64, quad-core Cortex-A5
 
 ---
 
-### Note on Scope and Build History
+### AArch64 and the Initramfs Path
 
-This was the first build in this series. It predates the formalized scope
-described in the repository overview — specifically, the goal of demonstrating
-the boot chain to Fedora userspace **without** relying on dracut or an initramfs.
+On AArch64, this build uses a Fedora-packaged kernel installed via `dnf` and a
+dracut-generated initramfs. This is the correct and intended path for AArch64
+boards — dracut is a Fedora package, kernel-install integrates with BLS, and
+`dnf update kernel` works automatically without manual intervention.
 
-This build uses a dracut-generated initramfs, which is standard practice on
-AArch64 and produces a working result. It is a departure from the scope these
-examples now target: mainline kernel with drivers compiled in, no initrd, direct
-boot to rootfs. The initrd approach is not wrong — it simply represents an
-earlier path that predates the no-initrd objective.
+The no-initrd approach used in the JH7110 builds (Milk-V Mars, Orange Pi RV)
+is a workaround for a packaging gap: Fedora does not ship riscv64 kernel RPMs
+in standard repos, so a custom kernel build is required. Without an initramfs,
+all rootfs-path drivers must be built in (`=y`). That constraint is specific to
+riscv64 and does not apply here.
 
-The current hold status (ethernet DMA reset failure, see below) means the build
-cannot be completed as-is regardless. When the ethernet issue is resolved, the
-intent is to revisit this chain and align it with the current scope: no dracut,
-drivers built in, same approach used in the JH7110 builds. What changes, what
-becomes easier or harder on AArch64 with that approach, and what the tradeoffs
-are will be documented at that point.
-
-In the meantime this document captures what was built, what worked, and what
-the current blocker is.
+dracut on AArch64 is not a compromise — it is the policy-correct path.
 
 ---
 
@@ -101,18 +94,17 @@ systemd-boot reads BLS entries from `loader/entries/`, loads the selected kernel
 image and DTB, and boots via EFI handoff.
 
 With a dracut initramfs, UUID-based root references work correctly in both the
-BLS entry and fstab. This is one of the practical differences from a no-initrd
-build — UUID resolution happens in early userspace rather than requiring an
-explicit device path in the kernel cmdline.
+BLS entry and fstab — UUID resolution happens in early userspace, before rootfs
+mount.
 
 ---
 
 ### Stage 6 — Linux kernel (AArch64)
 
 Built from mainline linux using a custom DTS derived from the upstream
-`rk3566-tinker-board-3.dtsi`. The build uses a dracut-generated initramfs,
-which means storage drivers can be modules — the `=y` constraint that applies
-to the JH7110 no-initrd builds does not apply here.
+`rk3566-tinker-board-3.dtsi`. The build uses a Fedora-packaged kernel and a
+dracut-generated initramfs — storage drivers can be modules and load normally
+via early userspace.
 
 **Current hold status:** Ethernet (gmac1, RTL8211F) fails with DMA reset
 errors under both kernel 6.19.8 and 7.0-rc4. Investigation to date:
@@ -144,10 +136,7 @@ These have not yet been tested. They represent the current investigation path.
 ### Stage 7 — Fedora 43 aarch64
 
 Standard Fedora 43 aarch64 rootfs. `dnf update kernel` works correctly via
-kernel-install + BLS when the initramfs path is in use — new kernels are added
-to the ESP automatically. This is one of the areas that will need re-examination
-if the build is revised to a no-initrd approach, since kernel-install behavior
-with custom DTBs and built-in driver requirements differs.
+kernel-install + BLS — new kernels are added to the ESP automatically.
 
 ---
 
@@ -161,7 +150,5 @@ Mainline kernel (6.19.8, 7.0-rc4) + mainline DTS → boots to login, ethernet DM
 ### Open Items
 
 - **Ethernet DMA reset** — root cause under investigation, leads above untested
-- **Build realignment** — when ethernet is resolved, revisit the build to align
-  with current scope: no dracut, drivers built in, explicit device path for root
 - **Upstream DTS contribution** — ethernet node additions to be submitted upstream
   once the DMA issue is resolved and the configuration is confirmed correct
