@@ -1,154 +1,279 @@
-## ASUS Tinker Board 3 — Boot Chain with Annotations
+# ASUS Tinker Board 3 — Fedora 43 aarch64 Boot Chain
 
-Hardware: ASUS Tinker Board 3, Rockchip RK3566 SoC (AArch64, quad-core Cortex-A55),
-4GB LPDDR4, SD card boot.
+A complete boot chain from SD card raw offsets to a running Fedora 43 aarch64
+userspace on the ASUS Tinker Board 3 (Rockchip RK3566). This documents what
+was built, the problems encountered, and the current open items.
 
-**Status: ⚠️ On hold — ethernet DMA reset failure under investigation**
+The goal: mainline U-Boot with EFI handoff, systemd-boot as boot manager,
+current Fedora release, `dnf update kernel` working without manual
+intervention. The Tinker Board 3 has no upstream DTS, the ethernet PHY
+required a non-obvious DTS investigation to bring up, and the kernel is
+currently the Rockchip BSP rather than mainline — all of this is documented
+below.
 
----
-
-### AArch64 and the Initramfs Path
-
-On AArch64, this build uses a Fedora-packaged kernel installed via `dnf` and a
-dracut-generated initramfs. This is the correct and intended path for AArch64
-boards — dracut is a Fedora package, kernel-install integrates with BLS, and
-`dnf update kernel` works automatically without manual intervention.
-
-The no-initrd approach used in the JH7110 builds (Milk-V Mars, Orange Pi RV)
-is a workaround for a packaging gap: Fedora does not ship riscv64 kernel RPMs
-in standard repos, so a custom kernel build is required. Without an initramfs,
-all rootfs-path drivers must be built in (`=y`). That constraint is specific to
-riscv64 and does not apply here.
-
-dracut on AArch64 is not a compromise — it is the policy-correct path.
+**Hardware:** ASUS Tinker Board 3 R1.03, Rockchip RK3566 SoC (4x Cortex-A55,
+aarch64), 4GB LPDDR4, Realtek RTL8211F-VD Gigabit Ethernet PHY, SD card
+only (no onboard eMMC).
 
 ---
 
-### The Boot Chain
+## Fedora Build Toolkit
+
+**Builder:** AArch64 builder VM — x86_64 host running aarch64 cross toolchain (Fedora 43)
+
+**Compiler packages:**
+```
+gcc-aarch64-linux-gnu    # 15.2.1 (Red Hat Cross)
+gcc-arm-linux-gnu        # for TF-A M0_CROSS_COMPILE (Cortex-M0 microcontroller)
+```
+
+**Build dependencies:**
+```
+bc  bison  flex  openssl-devel  elfutils-libelf-devel  perl  python3
+make  dtc  u-boot-tools
+```
+
+**Note:** `openssl-devel-engine`, `gnutls-devel`, and `python3-setuptools`
+are consistently absent from a base Fedora install and must be added
+explicitly. `arm-none-eabi-gcc` (bare-metal) is not available in Fedora
+repos — `arm-linux-gnu-` works as a substitute for the TF-A M0 component.
+
+**Rootfs bootstrap:** `dnf5 --installroot --forcearch=aarch64` on the builder VM.
+Add `iproute` explicitly to the package list — it is absent from the default
+bootstrap set and its absence breaks `ip` commands at first boot. After image
+assembly, run `dnf reinstall glibc` in the chroot — glibc is not correctly
+registered in the RPM database by the cross-arch install.
+
+---
+
+## Source Versions
+
+| Component    | Version                    | Notes / Key Config                              | Source                             |
+|--------------|----------------------------|-------------------------------------------------|------------------------------------|
+| TF-A BL31    | rk3568_bl31_v1.45.elf      | Shared blob — RK3566 and RK3568 use same BL31  | github.com/rockchip-linux/rkbin    |
+| U-Boot       | 2026.04                    | EFI_LOADER=y — base: rock-3c-rk3566_defconfig  | github.com/u-boot/u-boot           |
+| Linux        | 6.6.89 (BSP develop-6.6)   | Rockchip BSP — custom DTS; dracut initramfs    | github.com/rockchip-linux/kernel   |
+| systemd-boot | Fedora 43 systemd package  | bootctl install — full BLS conformance         | Fedora 43 systemd package          |
+| Fedora       | 43                         | aarch64                                         | Fedora repos                       |
+
+---
+
+## The Boot Chain
 
 ```
 RK3566 Boot ROM
-  → U-Boot SPL / idbloader     (SD card raw offset, AArch64)
-  → TF-A BL31                  (ARM Trusted Firmware, EL3)
-  → U-Boot proper v2024.x      (SD card raw offset)
-  → systemd-boot               (SD card ESP, FAT32)
-  → Linux 7.0-rc4 / 6.19.x    (SD card ESP)
-  → Fedora 43 aarch64          (SD card ext4 rootfs)
+  → idbloader.img                    (SD card, sector 64, raw offset)
+  → TF-A BL31 rk3568_bl31_v1.45.elf (embedded in u-boot.itb)
+  → U-Boot proper v2026.04           (SD card, sector 16384, raw offset)
+  → (trust.img at sector 24576 — BL31 in u-boot.itb is authoritative;
+     trust.img written separately per Rockchip convention)
+  → systemd-boot                     (SD card ESP, FAT32)
+  → Linux 6.6.89 + dracut initrd     (SD card ESP)
+  → Fedora 43 aarch64               (SD card ext4 rootfs)
 ```
 
 ---
 
-### Stage 1 — RK3566 Boot ROM
+## Stage 1 — RK3566 Boot ROM
 
-The RK3566 Boot ROM reads the first usable sectors of the SD card looking for
-an idbloader header signature. On finding a valid idbloader, it loads it into
-SRAM and executes it.
+The RK3566 Boot ROM is mask ROM — immutable, runs immediately after power-on.
+Like other Rockchip SoCs, it locates the bootloader by raw sector offset —
+sector 64 must contain a valid idbloader signature. No partition type GUID
+is required.
 
-The Rockchip Boot ROM does not use partition type GUIDs — it looks for raw
-header signatures at fixed offsets from the start of the storage medium. The
-idbloader is written to sector 64 (32KB offset) on the SD card, outside any
-partition table. This is the most significant structural difference from the
-JH7110 boot sequence.
+The Boot ROM produces no UART output. Absence of serial output after power-on
+means the Boot ROM did not find a valid idbloader.
 
----
-
-### Stage 2 — idbloader / U-Boot SPL (SD card, raw offset)
-
-The idbloader packages the DDR initialization firmware and U-Boot SPL into a
-single blob written to sector 64. It initializes LPDDR4, sets up the clock tree,
-and loads TF-A and U-Boot proper into DRAM.
-
-Built from mainline U-Boot using `rk3566-tinker-board-3` defconfig on a
-cross-compile builder VM (x86_64 host, aarch64-linux-gnu- cross-compiler).
-The Tinker Board 3 is a supported board in mainline U-Boot — no custom patches required.
+The Tinker Board 3 has no onboard eMMC and no SPI NOR. SD card is the sole
+boot medium — there is no automatic fallback. Recovery requires reflashing the
+SD card from another host.
 
 ---
 
-### Stage 3 — TF-A BL31 (ARM Trusted Firmware)
+## Stage 2 — idbloader (DDR init + SPL, sector 64)
 
-TF-A BL31 is the AArch64 secure firmware layer, providing runtime services at
-EL3 (the highest ARM exception level). It handles SMC (Secure Monitor Call)
-requests from the OS for power management, PSCI (power state coordination), and
-related services. This is the AArch64 architectural equivalent of OpenSBI on
-RISC-V — both are the secure firmware layer that the OS kernel trusts but never
-directly controls.
+`idbloader.img` is the Rockchip DDR initialization blob prepended to the
+U-Boot SPL. The Boot ROM loads it from SRAM; it initializes the RK3566's
+DDR controller, brings up 4GB of LPDDR4, then loads U-Boot proper from
+sector 16384.
 
-On RK3566, TF-A is packaged inside the idbloader or U-Boot FIT — not a separate
-flash partition. After BL31 initializes, execution drops to EL2/EL1 where
-U-Boot proper runs.
+**U-Boot defconfig:** No Tinker Board 3 defconfig exists in mainline U-Boot.
+`rock-3c-rk3566_defconfig` was chosen as the base — the ROCK 3C uses the
+same Realtek RTL8211F PHY (`CONFIG_PHY_REALTEK=y`). A custom
+`tinker-board-3-rk3566_defconfig` is saved in the U-Boot source tree.
+U-Boot identifies the hardware as "Radxa ROCK 3C" — cosmetic, harmless.
 
----
+**Build:**
+```
+make CROSS_COMPILE=aarch64-linux-gnu- ARCH=arm tinker-board-3-rk3566_defconfig
+make CROSS_COMPILE=aarch64-linux-gnu- ARCH=arm BL31=<rk3568_bl31_v1.45.elf>
+tools/mkimage -n rk3566 -T rksd -d spl/u-boot-spl.bin idbloader.img
+```
 
-### Stage 4 — U-Boot proper
-
-Standard U-Boot EFI boot — scans the SD card ESP for `EFI/BOOT/BOOTAA64.EFI`
-(systemd-boot) and hands off via `bootefi`. Built with `CONFIG_EFI_LOADER=y`.
-
-U-Boot environment stored on the SD card in a dedicated env partition.
-
----
-
-### Stage 5 — systemd-boot
-
-systemd-boot reads BLS entries from `loader/entries/`, loads the selected kernel
-image and DTB, and boots via EFI handoff.
-
-With a dracut initramfs, UUID-based root references work correctly in both the
-BLS entry and fstab — UUID resolution happens in early userspace, before rootfs
-mount.
+**Flash** (raw offsets — always write after partitioning):
+```
+dd if=idbloader.img of=/dev/sdX seek=64    conv=notrunc
+dd if=u-boot.itb    of=/dev/sdX seek=16384 conv=notrunc
+dd if=trust.img     of=/dev/sdX seek=24576 conv=notrunc
+```
 
 ---
 
-### Stage 6 — Linux kernel (AArch64)
+## Stage 3 — TF-A BL31 (embedded in U-Boot FIT)
 
-Built from mainline linux using a custom DTS derived from the upstream
-`rk3566-tinker-board-3.dtsi`. The build uses a Fedora-packaged kernel and a
-dracut-generated initramfs — storage drivers can be modules and load normally
-via early userspace.
+AArch64 requires a secure world firmware at EL3 to provide PSCI and a
+trusted execution environment. TF-A BL31 initializes the secure monitor
+and drops execution to EL2/EL1 for U-Boot proper and subsequently the OS.
 
-**Current hold status:** Ethernet (gmac1, RTL8211F) fails with DMA reset
-errors under both kernel 6.19.8 and 7.0-rc4. Investigation to date:
+The RK3566 and RK3568 share a BL31 binary — `rk3568_bl31_v1.45.elf` from
+the Rockchip rkbin repository. This is a pre-built blob embedded in
+`u-boot.itb` at compile time. A copy is also written at sector 24576
+(`trust.img`) per Rockchip convention, but the embedded BL31 in the FIT
+is what executes.
 
-- pinctrl gmac1m0 confirmed correct against schematic
-- RGMII delay values (0x36/0x2b) verified
-- CLK_MAC1_2TOP, aclk/pclk_gmac1 enabled at correct frequencies
-- vccio7 at 3.3V confirmed
-- All known DTS suspects cleared
-
-The board boots cleanly to login with networking disabled. Ethernet TX+RX
-works on the BSP vendor kernel (6.6.89), confirming the hardware is functional.
-The DMA reset failure is a mainline kernel interaction with this board's
-configuration — root cause not yet identified.
-
-Question posted to `#linux-rockchip` on Libera IRC. Awaiting response.
-
-New leads received (2026-03-27):
-1. `snps,reset-delays-us` — stmmac reset timing changed between 6.8 and 6.12;
-   explicit delay values may be required in the DTS
-2. Diff of BSP vs mainline stmmac driver for reset/clock patches not yet upstreamed
-3. MAC `2e:55` is locally-administered — verify whether BSP sets MAC explicitly
-   vs mainline deriving it from fuse
-
-These have not yet been tested. They represent the current investigation path.
+`arm-none-eabi-gcc` is not available in Fedora repos. Use `arm-linux-gnu-`
+for the TF-A Cortex-M0 component (`M0_CROSS_COMPILE`).
 
 ---
 
-### Stage 7 — Fedora 43 aarch64
+## Stage 4 — U-Boot proper v2026.04
 
-Standard Fedora 43 aarch64 rootfs. `dnf update kernel` works correctly via
-kernel-install + BLS — new kernels are added to the ESP automatically.
+With DRAM up and TF-A BL31 running in EL3, U-Boot presents a UEFI environment.
+It locates the ESP on the SD card (p1), finds `EFI/BOOT/BOOTAA64.EFI`, and
+hands off via standard `bootefi`.
 
----
-
-### Known-Good Baseline
-
-BSP kernel (6.6.89) + BSP DTB → boots to login, ethernet working.
-Mainline kernel (6.19.8, 7.0-rc4) + mainline DTS → boots to login, ethernet DMA reset failure.
+`CONFIG_EFI_LOADER=y` was already present in the rock-3c base defconfig —
+no modification required. `CONFIG_EFI_RT_VOLATILE_STORE=y` added to enable
+writable efivarfs and `bootctl install` EFI variable registration.
 
 ---
 
-### Open Items
+## Stage 5 — Linux 6.6.89 (Rockchip BSP kernel)
 
-- **Ethernet DMA reset** — root cause under investigation, leads above untested
-- **Upstream DTS contribution** — ethernet node additions to be submitted upstream
-  once the DMA issue is resolved and the configuration is confirmed correct
+**Why BSP, not mainline:** The Tinker Board 3 has no upstream DTS in the
+mainline kernel. A mainline boot was attempted using a DTS decompiled from
+the ASUS Debian image — it failed silently. BSP phandles are incompatible
+with mainline driver bindings. The Rockchip BSP kernel (`develop-6.6` branch)
+is the stable foundation; mainline migration is a future objective once a
+conformant DTS is established.
+
+**Why custom DTS:** No Tinker Board 3 DTS exists in either mainline or the
+BSP kernel source. The DTS was extracted from a running ASUS Debian image
+via `/sys/firmware/fdt`, decompiled, and committed to the build tree as
+`rk3566-tinker-board-3.dts`.
+
+**Ethernet DTS — two simultaneous bugs, both required to fix:**
+
+1. **pinctrl M0 → M1:** The mainline DTSI referenced `gmac1m0_*` pinctrl
+   groups. The board's MDIO and RGMII signals physically route through GPIO
+   bank 4 (M1 mux), not bank 3. On M0 the PHY was completely unreachable —
+   MDIO returning `0xffff` regardless of any other settings. Fix: switch all
+   `gmac1m0_*` references to `gmac1m1_*` pinctrl groups.
+
+2. **PHY reset GPIO:** `snps,reset-gpio` (deprecated MAC-level reset) was
+   not deasserting in the 7.0-rc4 kernel. `reset-gpios` in the PHY node
+   alone was also insufficient — phylib was not deasserting the GPIO during
+   probe. Fix: add a `gpio-hog` node in the `gpio3` bank to unconditionally
+   deassert the reset line at boot, before any driver probes:
+   ```
+   /* inside &gpio3 node */
+   phy-reset-hog {
+       gpio-hog;
+       gpios = <RK_PC2 GPIO_ACTIVE_LOW>;
+       output-low;   /* ACTIVE_LOW: output-low = physically HIGH = reset deasserted */
+       line-name = "phy-reset-deassert";
+   };
+   ```
+
+Both fixes must be present. Either one alone leaves the PHY unreachable.
+The failure mode for the pinctrl issue — MDIO returning `0xffff` — gives
+no indication that the signal routing is wrong. Check the schematic and
+IO domain assignments before spending time on PHY register debugging.
+
+**Build:**
+```
+make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- rockchip_linux_defconfig
+# apply DTS and menuconfig adjustments
+make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- Image dtbs modules
+make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- INSTALL_MOD_PATH=/tmp/modules modules_install
+```
+
+**Uses dracut initramfs:** UUID/LABEL syntax in BLS boot entries is safe.
+A `kernel-install` plugin at `/etc/kernel/install.d/60-tinker-board-3-dtb.install`
+injects the board DTB into the ESP and appends a `devicetree` line to the
+BLS entry on every kernel install. The DTB permanent home on the board is
+`/etc/kernel/dtbs/rk3566-tinker-board-3.dtb`.
+
+---
+
+## Stage 6 — Fedora 43 aarch64
+
+Standard Fedora 43 aarch64 userspace bootstrapped via `dnf5 --installroot
+--forcearch=aarch64` on the builder VM. Board boots to multi-user target
+with zero failed units.
+
+A fresh Fedora rootfs has `PermitRootLogin` disabled by default in sshd —
+enable it explicitly in `sshd_config` if root SSH access is required.
+
+```
+[root@tinkr3 ~]# uname -a
+Linux tinkr3 6.6.89-g1ba51b059f25-dirty #1 SMP ... aarch64 GNU/Linux
+
+[root@tinkr3 ~]# cat /etc/fedora-release
+Fedora release 43 (Forty Three)
+```
+
+---
+
+## Flash / Partition Layout
+
+SD card raw offsets (written with `dd` after partitioning):
+
+| Offset (sectors) | Content    | Notes                                                     |
+|------------------|------------|-----------------------------------------------------------|
+| 64               | idbloader.img | DDR init + SPL                                         |
+| 16384            | u-boot.itb    | U-Boot proper + TF-A BL31                              |
+| 24576            | trust.img     | TF-A BL31 (also embedded in FIT — written per Rockchip convention) |
+
+SD card partition table:
+
+| Partition | Size      | FS    | Mount | Content                              |
+|-----------|-----------|-------|-------|--------------------------------------|
+| sdXp1     | 512MB     | FAT32 | /boot | ESP — systemd-boot + kernels + DTBs  |
+| sdXp2     | remainder | ext4  | /     | Fedora 43 rootfs                     |
+
+SD card is the sole boot medium — no eMMC, no SPI NOR.
+
+---
+
+## Recovery
+
+The only recovery path on this board is reflashing the SD card from another
+host. There is no eMMC, no SPI NOR, and no Boot ROM recovery mode.
+
+```
+dd if=tinker-board-3.img of=/dev/sdX bs=4M status=progress conv=fsync
+```
+
+A known-good image should be archived to NAS storage before making changes
+to a working build.
+
+---
+
+## Open Items
+
+- **Mainline kernel migration** — BSP kernel (6.6.89) is the current lock;
+  a conformant DTS for submission upstream is a future objective
+- **RGMII TX tuning** — link is up at 1Gbps; tx_delay/rx_delay values
+  need final validation for full outbound frame reliability
+- **Clean shutdown** — `reboot` and `shutdown` do not trigger a clean
+  shutdown; power cycle required. Likely a DTS/PMIC gap.
+- **cpufreq** — PMIC/regulator DTS mismatch prevents CPU frequency scaling;
+  CPU runs at fixed frequency (non-critical for server use)
+- **DTS upstream submission** — gmac1m1 pinctrl + gpio-hog corrections are
+  candidates for upstream once the board has full mainline kernel support
+
+---
+
+Questions and corrections welcome — issues for specific problems,
+discussions for questions and experience sharing.
