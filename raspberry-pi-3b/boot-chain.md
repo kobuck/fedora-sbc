@@ -241,13 +241,24 @@ Pin 10 → RX (adapter TX)
 
 ---
 
+## Confirmed Working (2026-04-13)
+
+Full post-boot validation completed on RPi 3B Rev 1.2:
+
+- Network: smsc95xx USB-Ethernet (`enu1u1`), DHCP, DNS via local resolver ✅
+- NTP: chrony synced to local stratum 3 server (sub-millisecond offset) ✅
+- Package management: `dnf` fully functional against Fedora 43 repos ✅
+- Cockpit: installed and accessible via browser ✅
+- User accounts: root + wheel user configured ✅
+- EFI variables: stored in `ubootefi.var` on FAT partition, read-write ✅
+
 ## Open Items
 
 - **dnf update kernel** — kernel-install and dracut auto-rebuild not yet
   validated end-to-end on the target
-- **efivarfs persistence** — EFI variables stored in `ubootefi.var` on FAT
-  partition; persistence of `bootctl set-default` across reboots not verified
 - **WiFi** — BCM43438 driver present but not configured
+- **Fedora openh264 repo** — returns 404 for aarch64 (x86-only repo); disable
+  with `dnf config-manager --disable fedora-cisco-openh264` to suppress noise
 
 Questions and corrections welcome — issues for specific problems,
 discussions for questions and experience sharing.
