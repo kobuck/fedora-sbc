@@ -29,9 +29,12 @@ can receive kernel and package updates through normal Fedora tooling.
 These examples cover the firmware and boot chain layer. The kernel strategy
 varies by architecture, driven by Fedora packaging availability:
 
-**AArch64 boards** use the Fedora-packaged kernel installed via `dnf`. dracut
-generates an initramfs automatically via kernel-install, and `dnf update kernel`
-works without manual intervention. UUID references in boot entries are safe.
+**AArch64 boards** use the Fedora-packaged kernel installed via `dnf` where the
+board's DTB is included in the Fedora aarch64 kernel package. dracut generates an
+initramfs automatically via kernel-install, and `dnf update kernel` works without
+manual intervention. UUID references in boot entries are safe. Where the Fedora
+aarch64 kernel package does not yet include a board's DTB (e.g. Allwinner H618),
+a custom kernel build is required — the same packaging-gap pattern as riscv64.
 
 **RISC-V (riscv64) boards** have no kernel RPM in standard Fedora repos —
 riscv64 builds exist on Fedora's Koji infrastructure but cannot be installed
@@ -54,34 +57,35 @@ incomplete one are both useful outputs.
 | [Orange Pi RV](orangepi-rv/) | StarFive JH7110 | riscv64 | ✅ Fedora 43 | [boot-chain.md](orangepi-rv/boot-chain.md) |
 | [ASUS Tinker Board 3](tinker-board-3/) | Rockchip RK3566 | aarch64 | ⚠️ On hold — ethernet DMA | [boot-chain.md](tinker-board-3/boot-chain.md) |
 | [Raspberry Pi 3 Model B](raspberry-pi-3b/) | Broadcom BCM2837 | aarch64 | ✅ Fedora 43 | [boot-chain.md](raspberry-pi-3b/boot-chain.md) |
+| [Orange Pi Zero 3](orangepi-zero3/) | Allwinner H618 | aarch64 | ✅ Fedora 43 | [boot-chain.md](orangepi-zero3/boot-chain.md) |
 
 ## Boot Stage Comparison
 
-| Stage | Rock Pi 4 Plus | Milk-V Mars | Orange Pi RV | Tinker Board 3 | Raspberry Pi 3B |
+| Stage | Rock Pi 4 Plus | Milk-V Mars | Orange Pi RV | Tinker Board 3 | Raspberry Pi 3B | Orange Pi Zero 3 |
 |-------|----------------|-------------|--------------|----------------|-----------------|
-| **Boot ROM** | RK3399 — raw offset at sector 64 | JH7110 — partition type GUID | JH7110 — partition type GUID | RK3566 — raw offset at sector 64 | BCM2837 — VideoCore GPU ROM, FAT files |
-| **SPL** | idbloader (DDR init + SPL), SD raw | U-Boot SPL v2026.01, SPI NOR | U-Boot SPL v2026.01, SPI NOR | idbloader (DDR init + SPL), SD raw | bootcode.bin + start.elf (GPU firmware) |
-| **Secure firmware** | TF-A BL31 v2.12.0 (in U-Boot FIT) | OpenSBI v1.8.1 (in U-Boot FIT) | OpenSBI v1.8.1 (in U-Boot FIT) | TF-A BL31 (in idbloader/FIT) | None (GPU handles ARM release) |
-| **Bootloader** | U-Boot v2026.01, SD raw | U-Boot v2026.01, SPI NOR | U-Boot v2026.01, SPI NOR | U-Boot v2024.x, SD raw | U-Boot v2026.01, FAT file (loaded as "kernel") |
-| **Boot manager** | systemd-boot (bootctl installed) | systemd-boot (bootctl installed) | systemd-boot (fallback path) | systemd-boot (bootctl installed) | systemd-boot (fallback path) |
-| **Kernel** | Linux 6.19.9, Fedora-packaged | Linux 6.19.0, custom build (no riscv64 RPM in Fedora repos) | Linux 6.19.0, custom build (no riscv64 RPM in Fedora repos) | Linux 7.0-rc4, Fedora-packaged (⚠️ ethernet hold) | Linux 6.19.11, Fedora-packaged |
-| **initrd** | dracut initramfs (via kernel-install) | None — custom build, rootfs-path drivers =y | None — custom build, rootfs-path drivers =y | dracut initramfs (via kernel-install) | dracut initramfs (via kernel-install) |
-| **root= cmdline** | UUID safe (initrd resolves it) | Block device path required | Block device path required | UUID safe (initrd resolves it) | UUID safe (initrd resolves it) |
-| **Rootfs device** | SD card | SD card | NVMe | SD card | SD card |
-| **efivarfs** | rw (EFI_RT_VOLATILE_STORE=y) | rw (EFI_RT_VOLATILE_STORE=y) | ro | rw | rw (EFI_RT_VOLATILE_STORE=y) |
-| **OS** | Fedora 43 aarch64 | Fedora 43 riscv64 | Fedora 43 riscv64 | Fedora 43 aarch64 | Fedora 43 aarch64 |
+| **Boot ROM** | RK3399 — raw offset at sector 64 | JH7110 — partition type GUID | JH7110 — partition type GUID | RK3566 — raw offset at sector 64 | BCM2837 — VideoCore GPU ROM, FAT files | H618 (sunxi) — raw offset at sector 16; GPT entry array relocated to sector 2210 |
+| **SPL** | idbloader (DDR init + SPL), SD raw | U-Boot SPL v2026.01, SPI NOR | U-Boot SPL v2026.01, SPI NOR | idbloader (DDR init + SPL), SD raw | bootcode.bin + start.elf (GPU firmware) | U-Boot SPL v2026.04, SD card sector 16 (raw) |
+| **Secure firmware** | TF-A BL31 v2.12.0 (in U-Boot FIT) | OpenSBI v1.8.1 (in U-Boot FIT) | OpenSBI v1.8.1 (in U-Boot FIT) | TF-A BL31 (in idbloader/FIT) | None (GPU handles ARM release) | TF-A BL31 v2.12.0 (in U-Boot FIT) |
+| **Bootloader** | U-Boot v2026.01, SD raw | U-Boot v2026.01, SPI NOR | U-Boot v2026.01, SPI NOR | U-Boot v2024.x, SD raw | U-Boot v2026.01, FAT file (loaded as "kernel") | U-Boot v2026.04, SD card raw |
+| **Boot manager** | systemd-boot (bootctl installed) | systemd-boot (bootctl installed) | systemd-boot (fallback path) | systemd-boot (bootctl installed) | systemd-boot (fallback path) | systemd-boot (fallback path — efivarfs ro) |
+| **Kernel** | Linux 6.19.9, Fedora-packaged | Linux 6.19.0, custom build (no riscv64 RPM in Fedora repos) | Linux 6.19.0, custom build (no riscv64 RPM in Fedora repos) | Linux 7.0-rc4, Fedora-packaged (⚠️ ethernet hold) | Linux 6.19.11, Fedora-packaged | Linux 7.0.0-rc6, custom build (no H618 DTB in Fedora aarch64 kernel package) |
+| **initrd** | dracut initramfs (via kernel-install) | None — custom build, rootfs-path drivers =y | None — custom build, rootfs-path drivers =y | dracut initramfs (via kernel-install) | dracut initramfs (via kernel-install) | dracut initramfs (QEMU aarch64 chroot on builder) |
+| **root= cmdline** | UUID safe (initrd resolves it) | Block device path required | Block device path required | UUID safe (initrd resolves it) | UUID safe (initrd resolves it) | Block device path (`/dev/mmcblk0p2`) |
+| **Rootfs device** | SD card | SD card | NVMe | SD card | SD card | SD card |
+| **efivarfs** | rw (EFI_RT_VOLATILE_STORE=y) | rw (EFI_RT_VOLATILE_STORE=y) | ro | rw | rw (EFI_RT_VOLATILE_STORE=y) | ro (EFI_RT_VOLATILE_STORE not set) |
+| **OS** | Fedora 43 aarch64 | Fedora 43 riscv64 | Fedora 43 riscv64 | Fedora 43 aarch64 | Fedora 43 aarch64 | Fedora 43 aarch64 |
 
 ## Architecture Comparison
 
-| | RISC-V (JH7110) | AArch64 (RK3399 / RK3566) | AArch64 (BCM2837) |
+| | RISC-V (JH7110) | AArch64 (RK3399 / RK3566) | AArch64 (BCM2837) | AArch64 (H618) |
 |---|---|---|---|
-| Secure firmware | OpenSBI (RISC-V SBI spec) | TF-A BL31 (ARM TrustZone) | None — GPU handles ARM core release |
-| Boot ROM discovery | Partition type GUID | Raw sector offset (sector 64) | FAT files on MBR-visible partition |
-| Partition table | GPT | GPT | GPT + hybrid MBR (see BCM2837 notes) |
-| Kernel source | Custom build — no riscv64 RPM in standard Fedora repos | Fedora-packaged (`dnf install kernel`) | Fedora-packaged (`dnf install kernel kernel-modules`) |
-| initrd | None — custom build, rootfs-path drivers =y | dracut initramfs (via kernel-install) | dracut initramfs (via kernel-install) |
-| `root=` cmdline | Block device path only | UUID/LABEL safe | UUID/LABEL safe |
-| `dnf update kernel` | Manual (no kernel-install DTB plugin yet) | Automatic via kernel-install + BLS | Automatic via kernel-install + BLS |
+| Secure firmware | OpenSBI (RISC-V SBI spec) | TF-A BL31 (ARM TrustZone) | None — GPU handles ARM core release | TF-A BL31 (ARM TrustZone) |
+| Boot ROM discovery | Partition type GUID | Raw sector offset (sector 64) | FAT files on MBR-visible partition | Raw sector offset (sector 16); GPT entry array relocated |
+| Partition table | GPT | GPT | GPT + hybrid MBR (see BCM2837 notes) | GPT (entry array relocated via `sgdisk -j`) |
+| Kernel source | Custom build — no riscv64 RPM in standard Fedora repos | Fedora-packaged (`dnf install kernel`) | Fedora-packaged (`dnf install kernel kernel-modules`) | Custom build — no H618 DTB in Fedora aarch64 kernel package |
+| initrd | None — custom build, rootfs-path drivers =y | dracut initramfs (via kernel-install) | dracut initramfs (via kernel-install) | dracut initramfs (QEMU aarch64 chroot) |
+| `root=` cmdline | Block device path only | UUID/LABEL safe | UUID/LABEL safe | Block device path (UUID deferred) |
+| `dnf update kernel` | Manual (no kernel-install DTB plugin yet) | Automatic via kernel-install + BLS | Automatic via kernel-install + BLS | Manual (custom kernel, no RPM) |
 
 ## JH7110 Notes (riscv64 boards)
 
@@ -117,6 +121,39 @@ incomplete one are both useful outputs.
 
 - **Kernel/DTB pairing** — BSP kernel requires BSP DTB; mainline kernel requires
   mainline DTB. Mixing them produces an uninformative panic.
+
+## H618 Notes (Orange Pi Zero 3)
+
+- **GPT + sunxi SPL conflict** — The H618 Boot ROM hardcodes the SPL at byte
+  8192 (sector 16), which falls inside the standard GPT partition entry array
+  (sectors 2–33). Writing U-Boot destroys the primary GPT entry array on every
+  flash. Solution: `sgdisk -j 2210` relocates the entry array to sector 2210,
+  past the end of the ~1.1MB U-Boot binary. The backup GPT is unaffected; the
+  primary GPT survives all subsequent U-Boot writes. This is distinct from the
+  RK3399/RK3566 approach (sector 64, partition start ≥32768) — each SoC family
+  has its own raw offset to check against the actual binary size.
+
+- **U-Boot SPL config overrides** — Three values are absent from
+  `orangepi_zero3_defconfig` and must be set explicitly after `make defconfig`:
+  ```
+  CONFIG_SPL_SYS_MALLOC_F_LEN=0x10000
+  CONFIG_SPL_STACK_R_MALLOC_SIMPLE_LEN=0x200000
+  CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x50
+  ```
+  Without these, SPL fails with "alloc space exhausted" / "Could not get FIT
+  buffer". Verify the FIT sector offset by scanning the binary for FIT magic
+  bytes (`d00dfeed`).
+
+- **Custom kernel (packaging gap)** — The H618 DTS is in mainline from kernel
+  6.1 onward, but the Fedora aarch64 kernel package does not yet include the
+  H618 DTB. A custom kernel build is required. Unlike riscv64, aarch64 supports
+  dracut normally — the initramfs is built in a QEMU aarch64 chroot on the
+  builder VM.
+
+- **zram units** — Mask `systemd-zram-setup@zram0.service` and
+  `zram-generator.service`. Masking `dev-zram0.device` alone is insufficient —
+  the generator instantiates the setup service directly under
+  `/run/systemd/generator/` at boot.
 
 ## BCM2837 Notes (Raspberry Pi 3B)
 
