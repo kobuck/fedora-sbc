@@ -1,0 +1,282 @@
+# GPT Image Creation — Building These Boot Chains
+
+This describes the general process used to build every image in this
+repository: how the GPT partition layout is designed, why raw-sector
+bootloaders and GPT partition tables coexist without conflict, and the
+build sequencing that avoids several non-obvious failure modes. Board pages
+link back here rather than repeating this material per-board; board pages
+describe only what is specific to that SoC.
+
+## Why GPT at all, when some of these Boot ROMs read raw sectors?
+
+Every board in this repository ends up handing off to U-Boot's EFI
+subsystem, which locates the ESP (EFI System Partition) by scanning the GPT
+for its standard type GUID. **GPT is required for the boot chain to work at
+all, regardless of whether the earlier Boot ROM/SPL stage itself reads GPT
+or a raw sector offset.** MBR is not a viable alternative for any board
+here, even the ones (RK3399, RK3566, H618) whose Boot ROM ignores partition
+tables entirely and reads a fixed raw sector.
+
+This means every image has two independent addressing systems that must
+both be satisfied simultaneously:
+- The **Boot ROM/SPL stage**, which on most boards here reads a raw sector
+  offset with no awareness of any partition table at all
+- **Everything from U-Boot's EFI layer onward**, which requires a real,
+  valid GPT
+
+The partition layout below is designed so both can be true at once — by
+placing GPT partition *entries* over the raw regions purely as protective
+fencing (metadata only, no filesystem), so disk tools can see and avoid
+those regions without any tool needing to understand the raw sector
+convention itself.
+
+## The four (or five) storage entities, and why fence partitions exist
+
+Every image in this repository represents the same conceptual storage
+entities, though the exact count and GUIDs vary by SoC:
+
+1. **SPL / initial bootloader stage** — DDR init + first-stage bootloader,
+   loaded directly by the Boot ROM
+2. **U-Boot proper** (sometimes combined with SPL into one blob, depending
+   on vendor tooling) — the full bootloader with EFI support
+3. **ESP** — standard FAT32 EFI System Partition; kernels, DTBs, initrds,
+   BLS entries, systemd-boot binary
+4. **RootFS** — the actual Fedora userspace
+
+On boards where the Boot ROM reads a fixed raw sector (Rockchip RK3399/
+RK3566, Allwinner H618), partitions 1–2 (sometimes a third, RESERVED/TRUST
+slot) are **protective fence entries only** — GPT metadata with no
+filesystem, existing purely so `fdisk`/`parted`/`gnome-disks`/etc. can see
+and avoid these raw regions. Without them, the raw sectors are invisible to
+every disk tool and silently overwritable by routine operations like
+`sgdisk --zap-all` or a careless repartition. **The hardware itself ignores
+these GPT entries entirely** — a Boot ROM that reads raw sector 64 does not
+care what the GPT partition table says about sector 64; the fence entry is
+there for the humans and tools operating on the disk, not for the SoC.
+
+On boards where the Boot ROM itself locates firmware by GPT partition type
+GUID (StarFive JH7110), the equivalent partition entries are **not just a
+fence — they are load-bearing**. The Boot ROM scans the GPT for an exact
+GUID match; using the fence-only convention from a Rockchip board here
+would produce a silent, uninformative boot failure. Always check which mode
+applies for a given SoC before reusing a partition layout from another
+board.
+
+## Standard sizing
+
+| Partition | Typical size | Rationale |
+|-----------|--------------|-----------|
+| SPL+ | varies by SoC | Sized to the gap between the Boot ROM's fixed load address and wherever U-Boot proper begins — a hardware/convention constraint, not a size choice |
+| U-Boot | 4 MB | Comfortable headroom over current U-Boot FIT image sizes (typically 1.2–1.4 MB) |
+| ESP | 2 GB | FAT32; room for several kernel+DTB+initrd generations simultaneously, so old kernels don't need to be pruned aggressively to make room for new ones |
+| RootFS | remainder (or a fixed size — see Two-Target Builds below) | Everything left on the device after the above |
+
+## Build sequencing — the order that avoids silent corruption
+
+1. **Zero any known bootloader-environment sector range first**, if
+   rebuilding a device that previously had a valid U-Boot environment
+   saved (identifiable by a valid CRC on the env block at its known
+   offset). A stale environment from a previous build can persist across a
+   full reflash and reintroduce old, unwanted settings.
+2. **Partition the device** (`sgdisk`), placing fence entries over any raw
+   bootloader regions.
+3. **Format ESP and RootFS.**
+4. **Assemble the rootfs into the real partitioned target** — mount ESP and
+   RootFS into a real target tree, copy the built rootfs content in, write
+   `/etc/fstab` with the target's real UUIDs.
+5. **Run `kernel-install` (which invokes dracut) against the real, mounted
+   target** — not against a flat, unpartitioned rootfs directory. This
+   ordering matters more than it might appear: `kernel-install`'s BLS-entry
+   logic decides where entries belong by checking the *live mount table*
+   for a real mounted ESP at `/boot/efi`, not by reading `/etc/fstab` (which
+   at this point may not even reference a live device yet in some build
+   sequences). Running it too early, against a flat rootfs with no ESP
+   actually mounted, produces a confusing failure rather than a working
+   result.
+6. **Write the bootloader raw-sector blobs (idbloader/SPL, U-Boot proper)
+   as the absolute last step**, after every partition and filesystem
+   operation is complete. Any partition tool run after this point risks
+   silently destroying the blob — this is the single most consistent
+   footgun across every board in this repository, regardless of SoC.
+7. **Verify** — a full `gdisk -l`/`sgdisk -p` listing showing every
+   partition with correct type GUIDs is the primary success criterion: the
+   entire disk's contents should be self-documenting from that one command
+   alone, with no need for external reference to know what occupies each
+   region.
+
+## Cross-arch chroot build gotchas (building on an x86_64 builder VM)
+
+Every non-x86_64 image here is built on an x86_64 builder VM under
+qemu-user-static emulation, not natively on the target hardware. This
+introduces failure modes that don't occur when building or updating a
+system natively:
+
+- **`/etc/kernel/devicetree` must exist before the first `kernel-install`
+  run**, containing the DTB's relative path
+  (e.g. `rockchip/rk3399-rock-pi-4b-plus.dtb`). `kernel-install` does not
+  auto-detect a board's DTB from any other source; without this file the
+  resulting BLS entry silently has no `devicetree` line at all, and the
+  kernel will not boot correctly despite `kernel-install` reporting success.
+- **`/etc/kernel/cmdline` must exist before the first `kernel-install` run
+  inside the chroot**, containing the target's correct
+  `root=UUID=... console=... systemd.machine_id=...` values. A bare
+  `chroot` does not create a new kernel or PID namespace — even with
+  `/proc`, `/sys`, `/dev` correctly bind-mounted into the target,
+  `kernel-install`'s BLS-writing logic falls back to reading the **host's**
+  live `/proc/cmdline` whenever this file doesn't exist, silently baking
+  the *builder VM's own* root UUID and machine-id into the BLS entry. The
+  resulting entry looks entirely plausible (valid UUID and machine-id
+  format) and this will only be caught by explicitly cross-checking against
+  the target's actual `blkid` output — worth doing as a standard
+  verification step on every build, not just when something looks wrong.
+- **CA trust bundle may not be generated automatically** —
+  `update-crypto-policies --set DEFAULT` (a standard rootfs setup step)
+  does not itself regenerate `/etc/pki/ca-trust/extracted/pem/
+  tls-ca-bundle.pem`. If this file is missing, all HTTPS-based `dnf`
+  operations fail on first live boot with a TLS trust-anchor error. Run
+  `update-ca-trust extract` explicitly as its own step.
+- **Package post-install scriptlets that depend on a live D-Bus/systemd
+  context may not complete correctly under emulation** — one confirmed
+  example: `firewalld`'s PolicyKit action symlink
+  (`/usr/share/polkit-1/actions/org.fedoraproject.FirewallD1.policy`, which
+  polkit resolves to determine which policy variant is active) was absent
+  from disk on a freshly-built rootfs despite the RPM database listing it
+  as package-owned. This broke all `firewall-cmd` operations until
+  `dnf reinstall firewalld` was run against the live, booted target (not
+  the chroot) — the same scriptlet, run against a real running system
+  rather than under qemu emulation, completed correctly. Worth a general
+  verification pass (spot-check a few packages with D-Bus-dependent
+  post-install steps) rather than assuming every scriptlet ran cleanly
+  just because `dnf` reported no errors during the chroot build.
+
+## Two-Target Builds (SD + onboard eMMC on the same board)
+
+Some boards here (Rock Pi 4 Plus) have both a removable SD slot and
+non-removable onboard eMMC. Building each independently risks introducing
+drift between them and repeating diagnosis work on whichever target has
+less error margin. The preferred approach instead:
+
+1. **Build once, validate fully on the larger/more accessible target
+   (typically SD)** — this is where iteration and debugging happen.
+2. **Size RootFS as a fixed value** (not "remainder") from the start, sized
+   to fit the *smaller* target's actual usable capacity (measured directly
+   via `/sys/class/block/<dev>/size` or `blockdev --getsz` — always
+   confirm actual capacity, which is consistently smaller than the nominal/
+   marketing figure printed on the device) with reasonable margin. This
+   way the identical partition table works on both targets without
+   modification.
+3. **Clone the validated image onto the second target**, executed live from
+   the already-booted first target treating the second (often
+   non-removable, no external programmer available) target as an inert
+   block device.
+4. **Re-randomize storage-level identifiers only** on the cloned copy — GPT
+   disk GUID, all partition GUIDs, filesystem UUIDs (ext4 UUID, vfat volume
+   serial). This step is mandatory, not optional: both devices remain
+   simultaneously visible as block devices to whichever OS happens to be
+   running, regardless of which one actually booted, so UUID-based
+   resolution (`blkid`, `/etc/fstab`, BLS `options` lines) must be able to
+   tell them apart.
+5. **Leave machine-level identity shared** on the cloned copy — machine-id,
+   SSH host keys, hostname. Only one of the two devices is ever the actual
+   running system at any given moment (the non-booted device is simply
+   inert storage), so there is no scenario requiring two distinct machine
+   identities to coexist, and sharing them is both correct and simpler.
+6. **Update every file that references the old storage UUIDs on the cloned
+   copy** — `/etc/fstab`, every BLS entry's `options root=UUID=...` line,
+   and `/etc/kernel/cmdline` (easy to miss, but required so that any
+   *future* `kernel-install` run against the clone picks up the correct
+   identity rather than reverting to the original target's values).
+
+## Boot-device selection with two bootable devices — a real gotcha
+
+Once a board has two independently bootable storage devices, U-Boot's
+device-selection logic can surprise you. On U-Boot builds using
+`bootcmd=bootflow scan -lb` (the modern bootflow/bootmeth mechanism), device
+selection is governed by the **bootmeth priority list** (`bootmeths`), not
+a strict walk of `boot_targets` in order. If `efi_mgr` (EFI-Boot-Manager-
+style discovery) is present in `bootmeths`, it will select the first device
+it finds with a valid bootable ESP — which may not be the device listed
+first in `boot_targets`, if both devices happen to have valid ESPs
+simultaneously (exactly the situation a two-target build like the one
+above creates).
+
+**Fix, applied once both devices are built and bootable, persisted via
+`saveenv`:**
+```
+setenv bootmeths "extlinux script efi pxe"
+saveenv
+```
+Removing `efi_mgr` forces U-Boot to respect `boot_targets` device order
+using the remaining bootmeths. This is a one-time environment change that
+survives reboots — not a per-boot workaround.
+
+## Board-specific exceptions
+
+The general process above holds for every board here, but two boards
+require genuinely different handling at the Boot ROM/partition layer:
+
+### Raspberry Pi (BCM2837) — no SPL, hybrid MBR required
+
+The Broadcom VideoCore GPU ROM replaces the entire early boot stage — there
+is no SPL, and no raw-sector U-Boot write at all. The GPU ROM reads the
+boot partition as a plain FAT filesystem and loads U-Boot from it as if it
+were "the kernel," from the GPU's perspective. This means:
+- **No protective fence partitions are needed** — there's no raw sector
+  region to fence, since nothing is written outside the partition table.
+- **GPT alone is not sufficient**, because the GPU ROM reads an **MBR**
+  partition table to locate the FAT boot partition — it does not understand
+  GPT. The fix is a **hybrid MBR**: GPT remains the primary/real partition
+  table (required for the U-Boot EFI → systemd-boot handoff later in the
+  chain), with a legacy MBR overlay added afterward exposing just the ESP
+  as an MBR type `0x0C` (FAT32 LBA) entry, satisfying the GPU ROM without
+  disturbing the real GPT table underneath.
+```
+gdisk /dev/sdX
+  r    # recovery menu
+  h    # create hybrid MBR
+  1    # expose partition 1 only
+  N    # do not place EFI GPT partition first
+  0C   # MBR type: FAT32 LBA
+  N    # do not set bootable flag
+  w    # write and exit
+```
+
+### Allwinner H618 — GPT entry array physically overlaps the SPL
+
+The sunxi Boot ROM hardwires the SPL load address at raw sector (LBA) 16.
+The **standard** GPT partition entry array occupies LBA 2–33 by default —
+which includes LBA 16. A completely standard GPT layout on this SoC
+therefore silently overwrites the SPL on the very first partition
+operation, because the entry array and the SPL blob physically collide at
+the same sectors.
+
+**The fix:** relocate the GPT entry array itself, well clear of the SPL:
+```
+sgdisk -j 2210 /dev/sdX
+```
+This moves the entry array from its default location (LBA 2–33) to LBA
+2210 onward — far past the SPL (which occupies roughly LBA 16 through
+~2200 depending on blob size). With the entry array relocated, `gdisk -l`
+works normally and shows every partition correctly; the SPL and the GPT
+metadata simply no longer share the same physical sectors.
+
+**The ongoing hazard:** any GPT tool that doesn't understand or preserve
+this relocation will reset the entry array back to LBA 2 on its next
+write, silently destroying the SPL on the following power cycle.
+`growpart` is a confirmed offender — it calls `sgdisk` internally without
+preserving the relocation. The mitigation is process discipline: perform
+every partition and filesystem operation first, re-run
+`sgdisk -j 2210 /dev/sdX` as an explicit step immediately before writing
+the bootloader blob, and always write the blob as the final step of the
+entire build (which is already the standard rule for every board, but
+matters even more here since a repartition *after* the blob write is what
+actually triggers the entry-array reset).
+
+---
+
+Board-specific pages: each links back here for the shared process and
+documents only what differs for that SoC. See the per-board `boot-chain.md`
+pages for full worked GUID tables, sector maps, and build commands.
+
+Questions and corrections welcome — issues for specific problems,
+discussions for questions and experience sharing.

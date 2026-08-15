@@ -48,11 +48,20 @@ The examples show where the goal was reached, where it was partially reached,
 and where it is blocked. A working result and an honest status report on an
 incomplete one are both useful outputs.
 
+## GPT Image Creation
+
+The general partitioning, sequencing, and cross-arch-chroot-build process
+shared by every board here — including the reasoning behind protective
+fence partitions, build ordering, and the two board-specific exceptions
+(Raspberry Pi hybrid MBR, Allwinner H618 GPT relocation) — is documented
+once in [gpt-image-creation.md](gpt-image-creation.md) rather than repeated
+per board.
+
 ## Boards
 
 | Board | SoC | Arch | Status | Boot Chain |
 |-------|-----|------|--------|------------|
-| [Radxa Rock Pi 4 Plus](rock-pi-4-plus/) | Rockchip RK3399 | aarch64 | ✅ Fedora 43 | [boot-chain.md](rock-pi-4-plus/boot-chain.md) |
+| [Radxa Rock Pi 4 Plus](rock-pi-4-plus/) | Rockchip RK3399 | aarch64 | ✅ Fedora 44 — `dnf update kernel` confirmed | [boot-chain.md](rock-pi-4-plus/boot-chain.md) |
 | [Milk-V Mars](milkv-mars/) | StarFive JH7110 | riscv64 | ✅ Fedora 43 | [boot-chain.md](milkv-mars/boot-chain.md) |
 | [Orange Pi RV](orangepi-rv/) | StarFive JH7110 | riscv64 | ✅ Fedora 43 | [boot-chain.md](orangepi-rv/boot-chain.md) |
 | [ASUS Tinker Board 3](tinker-board-3/) | Rockchip RK3566 | aarch64 | ⚠️ On hold — ethernet DMA | [boot-chain.md](tinker-board-3/boot-chain.md) |
@@ -61,19 +70,19 @@ incomplete one are both useful outputs.
 
 ## Boot Stage Summaries
 
-### Radxa Rock Pi 4 Plus (RK3399, aarch64) — ✅ Fedora 43
+### Radxa Rock Pi 4 Plus (RK3399, aarch64) — ✅ Fedora 44
 
 | Stage | Detail |
 |-------|--------|
 | Boot ROM | RK3399 — raw offset, sector 64 |
 | SPL | idbloader (DDR init + SPL), SD card raw |
-| Secure firmware | TF-A BL31 v2.12.0, embedded in U-Boot FIT |
-| Bootloader | U-Boot v2026.01, SD card raw |
+| Secure firmware | TF-A BL31 v2.15.0, embedded in U-Boot FIT |
+| Bootloader | U-Boot v2026.07, SD card raw |
 | Boot manager | systemd-boot (`bootctl install` — full BLS) |
-| Kernel | Linux 6.19.9, Fedora-packaged |
+| Kernel | Linux 7.1.4 → 7.1.8 confirmed via in-place `dnf update`, Fedora-packaged |
 | initrd | dracut (via kernel-install, automatic) |
 | `root=` | UUID safe |
-| Rootfs | eMMC, ext4 |
+| Rootfs | SD card (primary/validated); cloned to onboard eMMC as a second target |
 | efivarfs | rw (`EFI_RT_VOLATILE_STORE=y`) |
 
 ### Milk-V Mars (StarFive JH7110, riscv64) — ✅ Fedora 43
@@ -180,6 +189,16 @@ incomplete one are both useful outputs.
 - **Kernel** — Fedora-packaged aarch64 kernel. `dnf update kernel` automatic.
 - **Kernel/DTB pairing** — BSP kernel requires BSP DTB; mainline kernel requires
   mainline DTB. Mixing produces an uninformative panic.
+- **Boot device selection with two bootable devices (Rock Pi 4 Plus
+  specifically — SD + onboard eMMC)** — U-Boot's `bootcmd=bootflow scan -lb`
+  uses the bootmeth priority list, not a strict `boot_targets` walk. With
+  `efi_mgr` present in `bootmeths` (compiled-in default), U-Boot boots
+  whichever device it finds a valid bootable ESP on first, regardless of
+  `boot_targets` order — this can mean it boots eMMC even with the SD card
+  present and listed first in `boot_targets`. Fix once both devices are
+  bootable: `setenv bootmeths "extlinux script efi pxe"; saveenv`. See
+  [gpt-image-creation.md](gpt-image-creation.md) for the general two-target
+  build process this applies to.
 
 ### AArch64 — BCM2837 (Raspberry Pi 3B)
 
@@ -221,6 +240,6 @@ incomplete one are both useful outputs.
 
 Builds use mainline sources:
 - **riscv64:** RISC-V builder VM (x86_64 host, riscv64 cross-compiler), U-Boot v2026.01, OpenSBI v1.8.1, Linux v6.19
-- **aarch64 (Rockchip):** AArch64 builder VM (x86_64 host, aarch64-linux-gnu- cross-compiler), U-Boot v2026.01, TF-A v2.12.0
+- **aarch64 (Rockchip):** AArch64 builder VM (x86_64 host, aarch64-linux-gnu- cross-compiler), U-Boot v2026.07 (Rock Pi 4 Plus), TF-A v2.15.0
 - **aarch64 (BCM2837):** Fedora-packaged kernel and U-Boot v2026.01; no custom kernel build required
 - Fedora 43 packages from [riscv-kojipkgs.fedoraproject.org](https://riscv-kojipkgs.fedoraproject.org/repos/f43-build/latest/riscv64/) (riscv64) and standard Fedora mirrors (aarch64)
