@@ -367,8 +367,7 @@ procedure this follows.
 ## Flash / Partition Layout
 
 Raw offsets (written with `dd`, always as the final build step — these
-sectors sit *within* the fenced partition ranges below, not before the GPT
-partition table, which itself lives at sectors 2–33):
+sectors sit *within* the fenced partition ranges below:
 
 | Offset (sectors) | Content        | Notes                        |
 |------------------|----------------|-------------------------------|
@@ -377,7 +376,7 @@ partition table, which itself lives at sectors 2–33):
 
 Partition table (5 partitions — SPL+/U-Boot/RESERVED are protective fence
 entries only, containing no filesystem; hardware ignores their GPT type
-GUIDs on this SoC, they exist purely so disk tools can see and avoid these
+GUIDs on this SoC, they exist purely so disk tools are aware of these
 raw regions):
 
 | Partition | Sector range        | Size    | FS    | Mount     | Content                 |
