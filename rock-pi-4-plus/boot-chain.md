@@ -407,18 +407,33 @@ SD immediately if eMMC fails.
 ## Open Items
 
 - **WiFi** — AP6256 (BCM4345C5); firmware not yet installed
-- **eMMC SELinux regression after `dnf upgrade`** — an in-place kernel
-  upgrade (7.1.4 → 7.1.8) that completed cleanly on the SD build instead
-  left the eMMC clone unable to complete boot on *either* kernel: the new
-  kernel (7.1.8) hangs after the display driver stack initializes; the
-  previously-working kernel (7.1.4) now also fails, with SELinux (enforcing
-  mode) denying `systemd` PID 1 a required early write, causing a hard
-  freeze. The SD build was never subjected to the same upgrade and remains
-  fully healthy. Root cause not yet identified — likely related to a
-  `selinux-policy`/`systemd` version pairing bumped together in the same
-  transaction, but this has not been confirmed. Filed as an open
-  investigation, not yet a bug report against any specific upstream
-  project, pending root-cause work.
+- **Kernel 7.1.5–7.1.8 hang binding the second VOP display unit —
+  workaround confirmed, root cause still open.** On this board, kernel
+  7.1.8 alone (no SELinux or systemd version change involved) hangs during
+  boot binding the RK3399's second VOP unit (`ff8f0000.vop`) — confirmed
+  via live serial console, several minutes of total silence, no recovery.
+  The first VOP (`ff900000.vop`) binds cleanly every time; the hang is
+  specific to the second. **Appending `nomodeset` to the kernel command
+  line (BLS entry `options` line) fully resolves it** — the board boots
+  clean to login on 7.1.8 with `nomodeset` (no local HDMI framebuffer
+  console; this board is normally accessed via SSH/serial anyway, so this
+  has no practical impact). `rockchipdrm.disable=1` was also tested and
+  does **not** help, which narrows the cause to the modeset/fbcon
+  console-takeover path specifically, not general driver presence. A
+  line-by-line review of the kernel.org stable ChangeLogs for 7.1.5
+  through 7.1.8 found no `drm/rockchip` commit that plausibly explains a
+  hard hang here, and no matching upstream bug report has been found
+  either. Working theory: a Fedora kernel **config** difference between
+  builds (e.g. a `CONFIG_DRM_ROCKCHIP_*` or fbcon/deferred-probe option)
+  rather than a kernel source regression — not yet confirmed. A full
+  `dnf upgrade` including a `systemd`/`selinux-policy` bump alongside the
+  kernel was separately re-tested end-to-end on the eMMC target and
+  completed cleanly (SELinux Enforcing, 0 failed units, 0 AVC denials) —
+  an earlier suspicion that SELinux/systemd was the source of a boot
+  freeze did not hold up under a direct retest and is considered resolved;
+  the VOP hang above is a distinct, unrelated issue. Board runs production
+  on 7.1.8 + `nomodeset` today. Will file upstream once root-caused with a
+  reproducible config diff.
 
 ---
 
