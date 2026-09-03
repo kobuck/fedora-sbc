@@ -37,46 +37,25 @@ fencing (metadata only, no filesystem), so disk tools can see and avoid
 those regions without any tool needing to understand the raw sector
 convention itself.
 
-## The four (or five) storage entities, and why fence partitions exist
+## The Four Storage Entities
 
 Every image in this repository represents the same conceptual storage
-entities, though the exact count and GUIDs vary by SoC:
+entities:
 
-1. **SPL / initial bootloader stage** — DDR init + first-stage bootloader,
-   loaded directly by the Boot ROM
-2. **U-Boot proper** (sometimes combined with SPL into one blob, depending
-   on vendor tooling) — the full bootloader with EFI support
-3. **ESP** — standard FAT32 EFI System Partition; kernels, DTBs, initrds,
-   BLS entries, systemd-boot binary
-4. **RootFS** — the actual Fedora userspace
+- **SPL / initial bootloader stage** — DDR init + first-stage bootloader,
+  loaded directly by the Boot ROM
+- **U-Boot proper** — the full bootloader with EFI support
+- **ESP** — standard FAT32 EFI System Partition; kernels, DTBs, initrds,
+  BLS entries, systemd-boot binary
+- **RootFS** — the actual Fedora userspace
 
-On boards where the Boot ROM reads a fixed raw sector (Rockchip RK3399/
-RK3566, Allwinner H618), partitions 1–2 (sometimes a third, RESERVED/TRUST
-slot) are **protective fence entries only** — GPT metadata with no
-filesystem, existing purely so `fdisk`/`parted`/`gnome-disks`/etc. can see
-and avoid these raw regions. Without them, the raw sectors are invisible to
-every disk tool and silently overwritable by routine operations like
-`sgdisk --zap-all` or a careless repartition. **The hardware itself ignores
-these GPT entries entirely** — a Boot ROM that reads raw sector 64 does not
-care what the GPT partition table says about sector 64; the fence entry is
-there for the humans and tools operating on the disk, not for the SoC.
-
-On boards where the Boot ROM itself locates firmware by GPT partition type
-GUID (StarFive JH7110), the equivalent partition entries are **not just a
-fence — they are load-bearing**. The Boot ROM scans the GPT for an exact
-GUID match; using the fence-only convention from a Rockchip board here
-would produce a silent, uninformative boot failure. Always check which mode
-applies for a given SoC before reusing a partition layout from another
-board.
-
-## Standard sizing
-
-| Partition | Typical size | Rationale |
-|-----------|--------------|-----------|
-| SPL+ | varies by SoC | Sized to the gap between the Boot ROM's fixed load address and wherever U-Boot proper begins — a hardware/convention constraint, not a size choice |
-| U-Boot | 4 MB | Comfortable headroom over current U-Boot FIT image sizes (typically 1.2–1.4 MB) |
-| ESP | 2 GB | FAT32; room for several kernel+DTB+initrd generations simultaneously, so old kernels don't need to be pruned aggressively to make room for new ones |
-| RootFS | remainder (or a fixed size — see Two-Target Builds below) | Everything left on the device after the above |
+Of these, only the ESP and RootFS are formal GPT partitions in every
+image — SPL and U-Boot are raw sector writes that a SoC's Boot ROM expects
+at fixed or discoverable locations, not filesystem-based partitions in the
+traditional sense. To keep this raw bootloader space from being invisible
+dead space that any partitioning tool could silently overwrite, we allocate
+a fixed 16MB pre-ESP envelope, reserved for whatever SoC/SBC-specific
+firmware requirements a given board has.
 
 ## Template Partition Definitions
 
