@@ -7,6 +7,13 @@ build sequencing that avoids several non-obvious failure modes. Board pages
 link back here rather than repeating this material per-board; board pages
 describe only what is specific to that SoC.
 
+This document describes the current template's target implementation. As
+the template evolves, previous Home Lab builds may not conform to the
+current version — the intention is that the template is applied in the
+normal course of SBC build image maintenance (e.g. the next major Fedora
+release build for a given board), not retrofitted onto boards that are
+already working.
+
 ## Why GPT at all, when some of these Boot ROMs read raw sectors?
 
 Every board in this repository ends up handing off to U-Boot's EFI
@@ -70,6 +77,45 @@ board.
 | U-Boot | 4 MB | Comfortable headroom over current U-Boot FIT image sizes (typically 1.2–1.4 MB) |
 | ESP | 2 GB | FAT32; room for several kernel+DTB+initrd generations simultaneously, so old kernels don't need to be pruned aggressively to make room for new ones |
 | RootFS | remainder (or a fixed size — see Two-Target Builds below) | Everything left on the device after the above |
+
+## Template Partition Definitions
+
+For boards using the pre-ESP firmware envelope as-is (see Template in
+Practice below), the standard sector layout is:
+
+| Partition | Start LBA | Size | End LBA | Role |
+|---|---|---|---|---|
+| p1 | 64 | ~4 MiB | 8,191 | SPL — pre-ESP envelope |
+| p2 | 8,192 | 4 MiB | 16,383 | Spare — pre-ESP envelope |
+| p3 | 16,384 | 4 MiB | 24,575 | U-Boot — pre-ESP envelope |
+| p4 | 24,576 | 4 MiB | 32,767 | Spare — pre-ESP envelope |
+| p5 | 32,768 | 2 GiB | 4,227,071 | EFI System Partition (ESP) |
+| p6 | 4,227,072 | storage device specific | board-specific | RootFS |
+
+p1–p4 together form the 16MB pre-ESP firmware envelope. The ESP always
+starts at sector 32,768 and is always 2 GiB. RootFS is sized per board,
+computed from that board's real measured storage capacity rather than a
+fixed constant, so the same layout can serve both a build/validation SD
+card and a smaller onboard eMMC or NVMe target identically.
+
+**These definitions are subject to modification only as required to meet
+specifically defined SoC/SBC board requirements.**
+
+## Template in Practice
+
+- **Rockchip RK3399** — uses the template as-is; no modification required.
+- **Allwinner H618** — Boot ROM requires SPL at sector 16, forcing the GPT
+  partition table to relocate into p2.
+- **StarFive JH7110 (RISC-V)** — Boot ROM locates SPL and U-Boot by GPT
+  partition type GUID rather than fixed sector offset, so p1–p4 carry
+  vendor-specific GUIDs instead of raw positional requirements.
+- **Raspberry Pi BCM2837** — does not use the pre-ESP envelope at all;
+  implements a Hybrid MBR pointing to the ESP as its working boot
+  partition.
+
+Per-board implementation detail — exact sectors, partition GUIDs, and
+build commands — is covered in each board's own implementation page, not
+here.
 
 ## Build sequencing — the order that avoids silent corruption
 

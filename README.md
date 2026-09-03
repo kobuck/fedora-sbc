@@ -48,7 +48,26 @@ The examples show where the goal was reached, where it was partially reached,
 and where it is blocked. A working result and an honest status report on an
 incomplete one are both useful outputs.
 
-## GPT Image Creation
+## SBC Boot Image Creation
+
+Basing our builds on UEFI by definition requires boot images be based on
+GPT-formatted storage. The wide variation in solutions SBC manufacturers
+produce requires we define some method for organizing the structure of our
+builds. We have chosen to define a GPT implementation template that meets
+the needs of our intended architecture and serves as the base from which
+modifications can be made to accommodate the requirements of specific
+boards. Specifically, a Home Lab SBC boot image implements a pre-ESP
+firmware envelope as GPT structure dedicated to whatever SoC/SBC firmware
+requirements a given board implements.
+
+This approach aligns with general industry direction — ARM's EBBR (Embedded
+Base Boot Requirements) specification calls for GPT-based storage with
+firmware protected in dedicated or reserved partition space — but the
+industry has not standardized a specific implementation; sizes, partition
+counts, and layouts vary by vendor. Our template is one concrete, internally
+consistent instantiation of that same underlying principle, and an attempt
+to focus the effort we put into Home Lab builds so that it stays reusable as
+industry direction on this matures.
 
 The general partitioning, sequencing, and cross-arch-chroot-build process
 shared by every board here — including the reasoning behind protective
