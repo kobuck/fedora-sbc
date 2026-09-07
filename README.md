@@ -71,10 +71,9 @@ industry direction on this matures.
 
 The general partitioning, sequencing, and cross-arch-chroot-build process
 shared by every board here — including the reasoning behind protective
-fence partitions, build ordering, and the two board-specific exceptions
-(Raspberry Pi hybrid MBR, Allwinner H618 GPT relocation) — is documented
-once in [gpt-image-creation.md](gpt-image-creation.md) rather than repeated
-per board.
+fence partitions, build ordering, and any board-specific modifications —
+are documented once in [gpt-image-creation.md](gpt-image-creation.md)
+rather than repeated for each board.
 
 ## Boards
 
