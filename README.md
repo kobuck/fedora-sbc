@@ -52,9 +52,9 @@ incomplete one are both useful outputs.
 
 Basing builds on UEFI requires boot images be based on GPT-formatted storage.
 A GPT implementation template has been defined to address the wide variation
-in solutions SBC manufacturers produce and deliver a common storage format.
-This GPT template meets the needs of our intended architecture and serves as
-the base from which modifications to accommodate the requirements of specific
+in solutions SBC manufacturers produce and deliver a common Lab storage format.
+This GPT template meets the needs of the Lab architecture and serves as the
+base from which modifications to accommodate the requirements of specific
 boards can be made. Specifically, each Home Lab SBC boot image implements a
 pre-ESP firmware envelope as a GPT structure dedicated to containing whatever
 SoC/SBC firmware specific board requires.
