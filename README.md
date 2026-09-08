@@ -57,7 +57,7 @@ This GPT template meets the needs of the Lab architecture and serves as the
 base from which modifications to accommodate the requirements of specific
 boards can be made. Specifically, each Home Lab SBC boot image implements a
 pre-ESP firmware envelope as a GPT structure dedicated to containing whatever
-SoC/SBC firmware specific board requires.
+a specific SoC/SBC board's firmware requires.
 
 This approach aligns with general industry direction — ARM's EBBR (Embedded
 Base Boot Requirements) specification calls for GPT-based storage with
