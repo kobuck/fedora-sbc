@@ -50,28 +50,27 @@ incomplete one are both useful outputs.
 
 ## SBC Boot Image Creation
 
-Basing our builds on UEFI by definition requires boot images be based on
-GPT-formatted storage. The wide variation in solutions SBC manufacturers
-produce requires we define some method for organizing the structure of our
-builds. We have chosen to define a GPT implementation template that meets
-the needs of our intended architecture and serves as the base from which
-modifications can be made to accommodate the requirements of specific
-boards. Specifically, a Home Lab SBC boot image implements a pre-ESP
-firmware envelope as GPT structure dedicated to whatever SoC/SBC firmware
-requirements a given board implements.
+Basing builds on UEFI requires boot images be based on GPT-formatted storage.
+A GPT implementation template has been defined to address the wide variation
+in solutions SBC manufacturers produce and deliver a common storage format.
+This GPT template meets the needs of our intended architecture and serves as
+the base from which modifications to accommodate the requirements of specific
+boards can be made. Specifically, each Home Lab SBC boot image implements a
+pre-ESP firmware envelope as a GPT structure dedicated to containing whatever
+SoC/SBC firmware specific board requires.
 
 This approach aligns with general industry direction — ARM's EBBR (Embedded
 Base Boot Requirements) specification calls for GPT-based storage with
 firmware protected in dedicated or reserved partition space — but the
 industry has not standardized a specific implementation; sizes, partition
-counts, and layouts vary by vendor. Our template is one concrete, internally
-consistent instantiation of that same underlying principle, and an attempt
-to focus the effort we put into Home Lab builds so that it stays reusable as
-industry direction on this matures.
+counts, and layouts vary by vendor. The Lab template is one concrete,
+internally consistent instantiation of that same underlying principle, and
+is an attempt to insure the effort put into Lab builds is aligned with
+industry direction as it matures.
 
 The general partitioning, sequencing, and cross-arch-chroot-build process
 shared by every board here — including the reasoning behind protective
-fence partitions, build ordering, and any board-specific modifications —
+fence partitions, build ordering, and board-specific modifications —
 are documented once in [gpt-image-creation.md](gpt-image-creation.md)
 rather than repeated for each board.
 
