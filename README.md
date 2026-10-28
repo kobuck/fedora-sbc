@@ -79,6 +79,7 @@ rather than repeated for each board.
 | Board | SoC | Arch | Status | Boot Chain |
 |-------|-----|------|--------|------------|
 | [Radxa Rock Pi 4 Plus](rock-pi-4-plus/) | Rockchip RK3399 | aarch64 | ✅ Fedora 44 — `dnf update kernel` confirmed | [boot-chain.md](rock-pi-4-plus/boot-chain.md) |
+| [Orange Pi 5 Plus](orangepi-5-plus/) | Rockchip RK3588 | aarch64 | ✅ Fedora 44 | [boot-chain.md](orangepi-5-plus/boot-chain.md) |
 | [Milk-V Mars](milkv-mars/) | StarFive JH7110 | riscv64 | ✅ Fedora 43 | [boot-chain.md](milkv-mars/boot-chain.md) |
 | [Orange Pi RV](orangepi-rv/) | StarFive JH7110 | riscv64 | ✅ Fedora 43 | [boot-chain.md](orangepi-rv/boot-chain.md) |
 | [ASUS Tinker Board 3](tinker-board-3/) | Rockchip RK3566 | aarch64 | ⚠️ On hold — ethernet DMA | [boot-chain.md](tinker-board-3/boot-chain.md) |
@@ -100,6 +101,21 @@ rather than repeated for each board.
 | initrd | dracut (via kernel-install, automatic) |
 | `root=` | UUID safe |
 | Rootfs | SD card (primary/validated); cloned to onboard eMMC as a second target |
+| efivarfs | rw (`EFI_RT_VOLATILE_STORE=y`) |
+
+### Orange Pi 5 Plus (RK3588, aarch64) — ✅ Fedora 44
+
+| Stage | Detail |
+|-------|--------|
+| Boot ROM | RK3588 — raw offset, sector 64 |
+| SPL | idbloader (external DDR blob + SPL), SD card raw |
+| Secure firmware | TF-A BL31 v2.15.0, embedded in U-Boot FIT |
+| Bootloader | U-Boot v2026.07, SD card raw |
+| Boot manager | systemd-boot (`bootctl install` — full BLS) |
+| Kernel | Linux 7.2.x, Fedora-packaged |
+| initrd | dracut (via kernel-install, automatic) |
+| `root=` | UUID safe |
+| Rootfs | NVMe SSD, ext4 — **not** the SD card (see Architecture Notes) |
 | efivarfs | rw (`EFI_RT_VOLATILE_STORE=y`) |
 
 ### Milk-V Mars (StarFive JH7110, riscv64) — ✅ Fedora 43
@@ -216,6 +232,25 @@ rather than repeated for each board.
   bootable: `setenv bootmeths "extlinux script efi pxe"; saveenv`. See
   [gpt-image-creation.md](gpt-image-creation.md) for the general two-target
   build process this applies to.
+
+### AArch64 — RK3588 (Orange Pi 5 Plus)
+
+- **Boot ROM discovery** — raw sector offset (sector 64), same mechanism as
+  RK3399/RK3566. Partitions must start at sector 32768 or later.
+- **Secure firmware** — TF-A BL31 (ARM TrustZone), embedded in U-Boot FIT.
+- **External DDR blob required** — unlike RK3399, RK3588's SPL build needs
+  a proprietary Rockchip DDR init binary (`rkbin`) supplied via
+  `ROCKCHIP_TPL=` at build time. Omitting it produces a silently 0-byte
+  `idbloader.img` rather than a build failure — check the file size, not
+  just the build's exit code.
+- **Boot device cannot be NVMe** — the RK3588 Boot ROM has no PCIe/NVMe
+  driver support at the SPL stage under any configuration; this is an
+  architectural property of the SoC, not a config gap. Boards needing
+  NVMe-speed storage boot firmware from SD (or eMMC, hardware permitting)
+  and mount root from NVMe once U-Boot proper (which does have PCIe
+  support) has initialized the bus.
+- **Kernel** — Fedora-packaged aarch64 kernel. `dnf update kernel` expected
+  to work the same as on RK3399/RK3566.
 
 ### AArch64 — BCM2837 (Raspberry Pi 3B)
 
